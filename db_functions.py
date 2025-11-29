@@ -8,44 +8,37 @@ def connect_to_db():
 
 def get_basic_info(cursor):
     queries = {
-        # -- 1 Total suppliers --
-        "Total Suppliers": "SELECT COUNT(supplier_id) as total_suppliers FROM suppliers",
-        # -- 2 Total products --
-        "Total Products": "SELECT COUNT(*) AS total_products FROM products",
+        "Total Suppliers": "SELECT COUNT(*) AS count FROM suppliers",
 
-        # -- 3 Total categories dealing --
-        "Total Categories Dealing": "SELECT COUNT(DISTINCT category) AS total_categories FROM products",
+        "Total Products": "SELECT COUNT(*) AS count FROM products",
 
-        # -- 4  Total sales value made in last 3 months --
+        "Total Categories Dealing": "SELECT COUNT(DISTINCT category) AS count FROM products",
+
         "Total Sale Value (Last 3 Months)": """
-                                            select round(sum(abs(se.change_quantity) * p.price), 2) as total_sales_value_in_last_3_months
-                                            from stock_entries as se
-                                                     join products p on p.product_id = se.product_id
-                                            where se.change_type = "Sale"
-                                              and se.entry_date >= (select date_sub(max(entry_date), interval 3 month)
-                                                                    from stock_entries)
-                                            """,
+        SELECT ROUND(SUM(ABS(se.change_quantity) * p.price), 2) AS total_sale
+        FROM stock_entries se
+        JOIN products p ON se.product_id = p.product_id
+        WHERE se.change_type = 'Sale'
+        AND se.entry_date >= (
+        SELECT DATE_SUB(MAX(entry_date), INTERVAL 9 MONTH) FROM stock_entries)
+        """,
 
-        # -- 5  Total Restock value made in last 3 months --
-        "Total Restock value (Last 3 Months)": """
-                                               select round(sum(abs(se.change_quantity) * p.price), 2) as total_restock_value_in_last_3_months
-                                               from stock_entries as se
-                                                        join products p on p.product_id = se.product_id
-                                               where se.change_type = "Restock"
-                                                 and
-                                                   se.entry_date >= (select date_sub(max(entry_date), interval 3 month)
-                                                                     from stock_entries)
-                                               """,
+        "Total Restock Value (Last 3 Months)": """
+        SELECT ROUND(SUM(se.change_quantity * p.price), 2) AS total_restock
+        FROM stock_entries se
+        JOIN products p ON se.product_id = p.product_id
+        WHERE se.change_type = 'Restock'
+        AND se.entry_date >= (
+        SELECT DATE_SUB(MAX(entry_date), INTERVAL 9 MONTH) FROM stock_entries)
+        """,
 
-        # -- 6 Below Reorder & No Pending Reorders --
         "Below Reorder & No Pending Reorders": """
-                                               select count(*)
-                                               from products as p
-                                               where p.stock_quantity < p.reorder_level
-                                                 and product_id NOT IN (select distinct product_id
-                                                                        from reorders
-                                                                        where status = "Pending")
-                                               """
+        SELECT COUNT(*) AS below_reorder
+        FROM products p
+        WHERE p.stock_quantity < p.reorder_level
+        AND p.product_id NOT IN (
+        SELECT DISTINCT product_id FROM reorders WHERE status = 'Pending')
+        """
     }
 
     result = {}
@@ -53,28 +46,31 @@ def get_basic_info(cursor):
         cursor.execute(query)
         row = cursor.fetchone()
         result[label] = list(row.values())[0]
+
     return result
 
-queries = {
-    "Suppliers Contact Details": "SELECT supplier_name, contact_name, email, phone FROM suppliers",
-
-    "Products with Supplier and Stock": """
-                                    SELECT 
-                                        p.product_name,
-                                        s.supplier_name,
-                                        p.stock_quantity,
-                                        p.reorder_level
-                                    FROM products AS p
-                                    JOIN suppliers AS s 
-                                        ON p.supplier_id = s.supplier_id
-                                    ORDER BY p.product_name ASC
-                                    """,
-
-
-    "Products needing Reorder" : "select product_id, product_name,stock_quantity, reorder_level from products where stock_quantity < reorder_level"
-}
-
 def get_additional_tables(cursor):
+    queries = {
+        "Suppliers Contact Details": "SELECT supplier_name, contact_name, email, phone FROM suppliers",
+
+        "Products with Supplier and Stock": """
+            SELECT 
+                p.product_name,
+                s.supplier_name,
+                p.stock_quantity,
+                p.reorder_level
+            FROM products p
+            JOIN suppliers s ON p.supplier_id = s.supplier_id
+            ORDER BY p.product_name ASC
+        """,
+
+        "Products Needing Reorder": """
+            SELECT product_name, stock_quantity, reorder_level
+            FROM products
+            WHERE stock_quantity <= reorder_level
+        """
+    }
+
     tables = {}
     for label, query in queries.items():
         cursor.execute(query)
@@ -82,16 +78,54 @@ def get_additional_tables(cursor):
 
     return tables
 
-def add_new_manual_id(cursor, db , p_name, p_category, p_price, p_stock, p_reorder, p_supplier):
-    proc_call="call AddNewProductManualId(%s, %s, %s, %s,%s, %s)"
-    params = (p_name, p_category, p_price, p_stock, p_reorder, p_supplier)
+def get_categories(cursor):
+    cursor.execute("select Distinct category  from products  order by category  asc")
+    rows= cursor.fetchall()
+    return [row["category"] for row in rows]
+
+
+def get_suppliers(cursor):
+    cursor.execute("select supplier_id , supplier_name from suppliers order by  supplier_name asc")
+    return cursor.fetchall()
+
+def add_new_manual_id(cursor, db, p_name , p_category , p_price , p_stock , p_reorder, p_supplier):
+    proc_call= "call AddNewProductManualID(%s, %s, %s ,%s ,%s, %s)"
+    params= (p_name , p_category , p_price , p_stock , p_reorder, p_supplier)
     cursor.execute(proc_call, params)
     db.commit()
 
-def get_categories(cursor):
-    cursor.execute("select Distinct category from products order by category asc")
-    rows = cursor.fetchall()
-    return [row["category"] for row in rows]
+def get_all_products(cursor):
+    cursor.execute("select product_id, product_name from products order by  product_name")
+    return cursor.fetchall()
 
-def get_suppliers(cursor):
-    cursor.execute("select  supplier_id, supplier_name from suppliers order by supplier_name asc")
+def get_product_history(cursor, product_id):
+    query ="select * from product_inventory_history where product_id= %s order by record_type Desc"
+    cursor.execute(query , (product_id,))
+    return cursor.fetchall()
+
+def place_reorder(cursor, db, product_id , reorder_quantity):
+    query= """
+         insert into reorders (reorder_id,product_id ,reorder_quantity,reorder_date ,status)
+         select 
+         max(reorder_id)+1,
+         %s,
+         %s,
+         curdate(),
+         "Ordered"
+         from reorders;
+         """
+    cursor.execute(query,(product_id, reorder_quantity))
+    db.commit()
+
+
+def get_pending_reorders(cursor):
+    cursor.execute("""
+    select r.reorder_id , p.product_name
+    from reorders as r join products as p 
+    on r.product_id= p.product_id
+    """)
+    return cursor.fetchall()
+
+def mark_reorder_as_received(cursor, db, reorder_id):
+    cursor.callproc("MarkReorderAsReceived",[reorder_id])
+    db.commit()
