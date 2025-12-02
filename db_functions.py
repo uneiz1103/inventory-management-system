@@ -55,6 +55,7 @@ def get_additional_tables(cursor):
 
         "Products with Supplier and Stock": """
             SELECT 
+                p.product_id,
                 p.product_name,
                 s.supplier_name,
                 p.stock_quantity,
@@ -65,7 +66,7 @@ def get_additional_tables(cursor):
         """,
 
         "Products Needing Reorder": """
-            SELECT product_name, stock_quantity, reorder_level
+            SELECT product_id,product_name, stock_quantity, reorder_level
             FROM products
             WHERE stock_quantity <= reorder_level
         """
